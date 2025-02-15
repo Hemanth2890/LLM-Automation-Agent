@@ -17,6 +17,7 @@ import glob
 import sqlite3
 from datetime import datetime
 import requests
+from difflib import SequenceMatcher
 
 app = FastAPI()
 
@@ -38,14 +39,16 @@ def home():
 
 @app.post("/run")
 async def run_task(request: TaskRequest):
-    task_description = request.task
+    task_description = request.task.strip().lower()
     
     try:
         # A1: Install uv and run the data generation script
         if "install uv" in task_description:
             subprocess.run(['pip', 'install', 'uv'], check=True)
             user_email = os.getenv('USER_EMAIL')
-            subprocess.run(['python', 'https://raw.githubusercontent.com/sanand0/tools-in-data-science-public/tds-2025-01/project-1/datagen.py', user_email], check=True)
+            if not user_email:
+                raise HTTPException(status_code=400, detail="USER_EMAIL environment variable is missing.")
+            subprocess.run(['python', '-m', 'datagen', user_email], check=True)
             return {"message": "Data generated successfully."}
         
         # A2: Format the contents of /data/format.md using Prettier
@@ -54,7 +57,7 @@ async def run_task(request: TaskRequest):
             return {"message": "File formatted successfully."}
         
         # A3: Count the number of Wednesdays in /data/dates.txt
-        elif "count Wednesdays" in task_description:
+        elif "count wednesdays" in task_description:
             with open('/data/dates.txt', 'r') as f:
                 dates = f.readlines()
             wednesdays = sum(1 for date in dates if datetime.strptime(date.strip(), '%Y-%m-%d').weekday() == 2)
@@ -68,7 +71,7 @@ async def run_task(request: TaskRequest):
                 contacts = json.load(f)
             sorted_contacts = sorted(contacts, key=lambda x: (x['last_name'], x['first_name']))
             with open('/data/contacts-sorted.json', 'w') as f:
-                json.dump(sorted_contacts, f)
+                json.dump(sorted_contacts, f, indent=4)
             return {"message": "Contacts sorted successfully."}
         
         # A5: Write the first line of the 10 most recent .log files
@@ -77,8 +80,8 @@ async def run_task(request: TaskRequest):
             with open('/data/logs-recent.txt', 'w') as f:
                 for log_file in log_files:
                     with open(log_file, 'r') as lf:
-                        first_line = lf.readline()
-                        f.write(first_line)
+                        first_line = lf.readline().strip()
+                        f.write(first_line + "\n")
             return {"message": "Recent logs written successfully."}
         
         # A6: Create an index of H1 titles from Markdown files
@@ -91,7 +94,7 @@ async def run_task(request: TaskRequest):
                             index[os.path.basename(md_file)] = line[2:].strip()
                             break
             with open('/data/docs/index.json', 'w') as f:
-                json.dump(index, f)
+                json.dump(index, f, indent=4)
             return {"message": "Index created successfully."}
         
         # A7: Extract sender's email from /data/email.txt using LLM
@@ -147,9 +150,13 @@ async def read_file(path: str):
 
 def call_llm_to_extract_email(email_content):
     # Function to call the AI Proxy to extract email
+    api_key = os.getenv("AIPROXY_TOKEN")
+    if not api_key:
+        return "API token missing."
+    
     url = "https://api.aiproxy.com/run"
     headers = {
-        "Authorization": f"Bearer {os.environ['AIPROXY_TOKEN']}",
+        "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json"
     }
     payload = {
@@ -160,9 +167,13 @@ def call_llm_to_extract_email(email_content):
 
 def call_llm_to_extract_card_number(image_path):
     # Function to call the AI Proxy to extract card number from image
+    api_key = os.getenv("AIPROXY_TOKEN")
+    if not api_key:
+        return "API token missing."
+
     url = "https://api.aiproxy.com/run"
     headers = {
-        "Authorization": f"Bearer {os.environ['AIPROXY_TOKEN']}",
+        "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json"
     }
     payload = {
@@ -172,9 +183,17 @@ def call_llm_to_extract_card_number(image_path):
     return response.json().get("card_number", "Card number not found.")
 
 def find_most_similar_comments(comments):
-    # Function to find the most similar comments (pseudo-code)
-    # Implement your logic here
-    return comments[:2]  # Placeholder for the most similar comments
+    max_ratio = 0
+    best_pair = ("", "")
+    
+    for i in range(len(comments)):
+        for j in range(i + 1, len(comments)):
+            ratio = SequenceMatcher(None, comments[i], comments[j]).ratio()
+            if ratio > max_ratio:
+                max_ratio = ratio
+                best_pair = (comments[i].strip(), comments[j].strip())
+
+    return best_pair
 
 if __name__ == "__main__":
     import uvicorn
